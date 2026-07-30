@@ -1,0 +1,90 @@
+# syntax=docker/dockerfile:1.7
+
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        wget \
+        unzip \
+        software-properties-common \
+        pkg-config \
+        bison \
+        flex \
+        mold \
+        autoconf \
+        autoconf-archive \
+        libtool \
+        zlib1g-dev \
+        python3-dev \
+        libjemalloc-dev \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 24.04 does not provide the required CMake version in the default
+# repositories.
+RUN case "$(dpkg --print-architecture)" in \
+        amd64) CMAKE_ARCH=x86_64 ;; \
+        arm64) CMAKE_ARCH=aarch64 ;; \
+        *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+    esac \
+    && wget -q "https://github.com/Kitware/CMake/releases/download/v4.2.3/cmake-4.2.3-linux-${CMAKE_ARCH}.tar.gz" \
+        -O /tmp/cmake.tar.gz \
+    && mkdir -p /opt/cmake \
+    && tar -xzf /tmp/cmake.tar.gz --strip-components=1 -C /opt/cmake \
+    && ln -s /opt/cmake/bin/cmake /usr/local/bin/cmake \
+    && ln -s /opt/cmake/bin/ctest /usr/local/bin/ctest \
+    && rm -f /tmp/cmake.tar.gz
+
+RUN wget -q https://apt.llvm.org/llvm.sh -O /tmp/llvm.sh \
+    && chmod +x /tmp/llvm.sh \
+    && /tmp/llvm.sh 20 \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends clang-tools-20 lld-20 \
+    && rm -rf /var/lib/apt/lists/* /tmp/llvm.sh \
+    && ln -s /usr/bin/clang-20 /usr/local/bin/clang \
+    && ln -s /usr/bin/clang++-20 /usr/local/bin/clang++
+
+# GCC 15 supplies the libstdc++ required by the C++23/module toolchain.
+RUN add-apt-repository -y ppa:puni070/gcc-noble \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gcc-15 g++-15 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CC=/usr/bin/clang-20 \
+    CXX=/usr/bin/clang++-20 \
+    VCPKG_ROOT=/opt/vcpkg
+
+RUN git clone --depth 1 https://github.com/microsoft/vcpkg.git /opt/vcpkg \
+    && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+COPY . /src
+WORKDIR /src
+
+RUN cmake -G Ninja \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake \
+        -S /src \
+        -B /build \
+    && cmake --build /build --target infinity --parallel
+
+FROM ubuntu:24.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libjemalloc2 \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/src/infinity /usr/bin/infinity
+COPY --from=builder /src/resource /usr/share/infinity/resource
+
+ENTRYPOINT ["/usr/bin/infinity"]
