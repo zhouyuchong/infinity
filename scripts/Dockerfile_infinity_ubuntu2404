@@ -5,10 +5,23 @@ FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+ARG UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu
+
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+    && echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99-bootstrap-ca \
+    && echo 'Acquire::https::Verify-Host "false";' >> /etc/apt/apt.conf.d/99-bootstrap-ca
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
         git \
+        zip \
+        tar \
         wget \
         unzip \
         software-properties-common \
@@ -23,6 +36,10 @@ RUN apt-get update \
         python3-dev \
         libjemalloc-dev \
         build-essential \
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99-bootstrap-ca
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 24.04 does not provide the required CMake version in the default
@@ -60,6 +77,7 @@ ENV CC=/usr/bin/clang-20 \
     VCPKG_ROOT=/opt/vcpkg
 
 RUN git clone --depth 1 https://github.com/microsoft/vcpkg.git /opt/vcpkg \
+    && git -C /opt/vcpkg fetch --depth 1 origin a7c451bd6cd6f4c223de0dbfdc28499262423538 \
     && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
 COPY . /src
@@ -76,13 +94,23 @@ FROM ubuntu:24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+ARG UBUNTU_MIRROR=https://mirrors.aliyun.com/ubuntu
+
+RUN sed -i \
+        -e "s|http://archive.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        -e "s|http://security.ubuntu.com/ubuntu|${UBUNTU_MIRROR}|g" \
+        /etc/apt/sources.list.d/ubuntu.sources \
+    && echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+    && echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99-bootstrap-ca \
+    && echo 'Acquire::https::Verify-Host "false";' >> /etc/apt/apt.conf.d/99-bootstrap-ca
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         libjemalloc2 \
         libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/99-bootstrap-ca
 
 COPY --from=builder /build/src/infinity /usr/bin/infinity
 COPY --from=builder /src/resource /usr/share/infinity/resource
