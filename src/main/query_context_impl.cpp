@@ -15,6 +15,8 @@
 module;
 
 #include <csignal>
+#include <chrono>
+#include <thread>
 
 module infinity_core:query_context.impl;
 
@@ -45,6 +47,13 @@ import parser_assert;
 import global_resource_usage;
 
 namespace infinity {
+
+namespace {
+
+constexpr u32 kMaxTxnConflictRetries = 3;
+constexpr u32 kTxnConflictRetryBackoffMs = 10;
+
+} // namespace
 
 QueryContext::QueryContext(BaseSession *session) : session_ptr_(session) {
 #ifdef INFINITY_DEBUG
@@ -112,9 +121,24 @@ QueryResult QueryContext::Query(const std::string &query) {
 
 QueryResult QueryContext::QueryStatement(const BaseStatement *base_statement) {
     QueryResult query_result;
+    u32 txn_conflict_retries = 0;
     do {
         query_result = QueryStatementInternal(base_statement);
-    } while (!query_result.status_.ok() && query_result.status_.code_ == ErrorCode::kTxnConflict);
+
+        if (query_result.status_.code_ != ErrorCode::kTxnConflict) {
+            break;
+        }
+
+        if (txn_conflict_retries == kMaxTxnConflictRetries) {
+            const std::string conflict_message = query_result.status_.message();
+            query_result.status_.Init(ErrorCode::kTxnConflictNoRetry, conflict_message.c_str());
+            break;
+        }
+
+        const u32 backoff_ms = kTxnConflictRetryBackoffMs << txn_conflict_retries;
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoff_ms));
+        ++txn_conflict_retries;
+    } while (true);
 
     return query_result;
 }

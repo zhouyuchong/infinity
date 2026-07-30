@@ -147,6 +147,9 @@ TEST_F(ConflictCheckTest, conflict_check_delete) {
         ExpectConflict(txn2);
         ExpectConflict(txn3);
 
+        EXPECT_EQ(txn2->GetTxnState(), TxnState::kRollbacked);
+        EXPECT_EQ(txn3->GetTxnState(), TxnState::kRollbacked);
+
         --row_cnt;
         CheckRowCnt(*db_name, *table_name, row_cnt);
     }
